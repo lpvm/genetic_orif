@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 )
 
 type popDetails struct {
@@ -14,16 +15,19 @@ var productCode int
 var universe = make(map[int]popDetails)
 
 const maxPrice = 10000
-const univSize = 100
+const univSize = 10
 const popSize = 8
-const indivSize = 10 				// 10 products, means 20 aleles
-const kitPrice = 9000				// in cents
-const familyRatio = 7.0/10.0		// at least 7 families in 10 products
+const kitPrice = 9000          // in cents
+const familyRatio = 7.0 / 10.0 // at least 7 families in 10 products
+const tournSize = 2
+const minFit = 1000
 
 func rndInt(lo, hi int) int {
 	return rand.Intn(hi-lo) + lo
 }
 
+// mapUniverse simulates the entire set of products available, with
+// product code, family of product and price
 func mapUniverse(nr int) map[int]popDetails {
 	p := make(map[int]popDetails)
 	for i := 0; i < nr; i++ {
@@ -46,16 +50,9 @@ func randEnabled() int {
 // Each gene has 10 possible products, i.e., ten pairs of | 1 or 0| code number |
 func buildGene(codes []int) []int {
 	var g []int
-	var rndC int
-	for {
-		rndC = codes[rndInt(0, len(codes))]
-		if !contains(g, rndC) {
-			g = append(g, randEnabled())
-			g = append(g, rndC)
-		}
-		if len(g) == indivSize*2 {
-			break
-		}
+	for c := 0; c < univSize; c++ {
+		g = append(g, randEnabled())
+		g = append(g, codes[c])
 	}
 	return g
 }
@@ -67,21 +64,6 @@ func contains(sl []int, n int) bool {
 		}
 	}
 	return false
-}
-
-// uniqCodes builds a []int with popSize product codes that are unique
-func uniqCodes(all []int) []int {
-	uniq := make([]int, popSize)
-	for c := 0; c < popSize; c++ {
-		r := rndInt(0, univSize)
-		if !contains(uniq, r) {
-			uniq = append(uniq, r)
-		}
-		if len(uniq) == popSize {
-			return uniq
-		}
-	}
-	return uniq
 }
 
 func buildInitialPopulation(sz int, all []int) [][]int {
@@ -104,20 +86,23 @@ func chooseCodes(sz int) []int {
 
 // quantifyGene takes a chromossome like
 // [0 0 0 70026 0 31229 0 67967 1 86397 0 6327 4 1 87620 1 14976 0 98039 1 90378]
-// and calculates its fitness
+// and return sum of price of products and number of families
 func quantifyGene(ch []int) (int, map[int]int) {
 	active := false
 	price := 0
 	families := make(map[int]int)
 	for i := 0; i < len(ch); i++ {
+		// if it's active, set flag
 		if i%2 == 0 && ch[i] == 1 {
 			active = true
 		}
+		// if it's active, get price and family
 		if i%2 == 1 && active {
 			u := universe[ch[i]]
 			price += u.price
 			family := u.family
 			families[family] += 1
+			active = false
 		}
 	}
 	return price, families
@@ -133,11 +118,11 @@ func calculateFitness(p int, f map[int]int) float64 {
 	fit := 0.0
 	factor := 500.0
 	penalty := 2.0
-    switch {
-		case p > kitPrice:
-				fit -= float64(p - kitPrice)
-		case p < kitPrice:
-				fit -= penalty * float64(kitPrice - p)
+	switch {
+	case p > kitPrice:
+		fit -= float64(p - kitPrice)
+	case p < kitPrice:
+		fit -= penalty * float64(kitPrice-p)
 	}
 	fmt.Println("p: ", p, "  f: ", f, "  fit: ", fit)
 
@@ -147,23 +132,87 @@ func calculateFitness(p int, f map[int]int) float64 {
 	}
 
 	fit += factor * float64(nrProducts) / float64(nrFamilies)
-	
 
 	fmt.Println("p: ", p, "  f: ", f, "  fit: ", fit, "  nrProducts: ", nrProducts, " nrFamilies: ", nrFamilies)
 	return fit
 }
 
-func evaluateChromossome(pop [][]int) map[int]float64 {
-	fit := make(map[int]float64)
+func evaluatePopulation(pop [][]int) []float64 {
+	fit := make([]float64, 0)
 	p := 0
-	f := make(map[int]int)
+	fam := make(map[int]int)
 	for i := 0; i < len(pop); i++ {
-		p, f = quantifyGene(pop[i])
+		p, fam = quantifyGene(pop[i])
 		fmt.Println("Gene: ", pop[i])
-		fit[i] = calculateFitness(p, f)
-
+		fit = append(fit, calculateFitness(p, fam))
 	}
 	return fit
+}
+
+func rescale(f []float64) []float64 {
+	var lowest float64 = 1e300
+	newFit := make([]float64, 0)
+	for n := 0; n < len(f); n++ {
+		if f[n] < lowest {
+			lowest = f[n]
+		}
+	}
+	addFit := minFit - lowest
+	fmt.Println("adding: ", addFit, " because of lowest: ", lowest)
+	for n := 0; n < len(f); n++ {
+		newFit = append(newFit, f[n]+addFit)
+	}
+	return newFit
+}
+
+// selectParents use tournament to select parents of offspring based on their
+// fitness
+// returns a slice of the code numbers of parents, so that
+// [par1, par1, par2, par2, par3, par3, ...]
+func selectParents(p [][]int, fit []float64) []int {
+	var p1 int
+	var p2 int
+	var fp1 float64
+	var fp2 float64
+	parents := make([]int, 0)
+	for n := 0; n < 2*popSize; n++ {
+		p1 = rndInt(0, popSize)
+		p2 = rndInt(0, popSize)
+		fp1 = fit[p1]
+		fp2 = fit[p2]
+		switch {
+		case fp1 > fp2:
+			parents = append(parents, p1)
+		case fp2 > fp1:
+			parents = append(parents, p2)
+		case fp1 == fp2:
+			parents = append(parents, p1)
+		}
+	}
+	return parents
+}
+
+func crossover(pop [][]int, parents []int) [][]int {
+	children := make([][]int, len(pop))
+	child := make([]int, 0)
+	last := -1
+	indivSize := len(pop[0]) // assuming all individuals have equal length
+	parent1 := make([]int, 0)
+	parent2 := make([]int, 0)
+	var crosspoint int
+	for n := 0; n < len(parents); n++ {
+		if n%2 == 0 {
+			last = parents[n]
+		} else {
+			crosspoint = rndInt(1, indivSize)
+			parent1 = pop[last]
+			parent2 = pop[parents[n]]
+			child = parent1[0:crosspoint]
+			child = append(child, parent2[crosspoint:]...)
+		}
+		children[n / 2] = child
+	}
+	return children
 }
 
 func main() {
@@ -171,10 +220,33 @@ func main() {
 
 	universe = mapUniverse(univSize)
 	fmt.Println("Universe: ", universe)
-	univCodes := chooseCodes(popSize)
+	univCodes := chooseCodes(univSize)
 	fmt.Println("univCodes: ", univCodes)
 	population := buildInitialPopulation(popSize, univCodes)
 	fmt.Println("Population: ", population)
-	evaluateChromossome(population)
-
+	fit := make([]float64, 0)
+	pool := make([]int, 0)
+	stat := make([][]float64, 0)
+	statGen := make([]float64, 2)
+	generations := 0
+	for {
+		fit = evaluatePopulation(population)
+		fmt.Println("-------------------------------------------------------------")
+		fmt.Println("fit1: ", fit)
+		fit = rescale(fit)
+		fmt.Println("fit2: ", fit)
+		pool = selectParents(population, fit)
+		sort.Float64s(fit)
+		statGen[0] = fit[0]
+		statGen[1] = fit[len(fit) - 1]
+		stat = append(stat, statGen)
+		fmt.Println("pool: ", pool)
+		population = crossover(population, pool)
+		fmt.Println("offspring ", population)
+		if generations == 3 {
+				break
+		}
+		generations += 1
+	}
+	fmt.Println("stat: ", stat)
 }
