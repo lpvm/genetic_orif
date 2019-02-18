@@ -24,6 +24,7 @@ const tournSize = 2
 const minFit = 1000
 const factor = 500.0 // for family diversity, the more, the better
 const penalty = 2.0  // for distance of sum of prices to 9000, when below
+const probMutation = 0.1
 
 func rndInt(lo, hi int) int {
 	return rand.Intn(hi-lo) + lo
@@ -116,6 +117,8 @@ func calculateFitness(p int, f map[int]int) float64 {
 	nrProducts := 0
 	fit := 0.0
 	switch {
+	case p == 0:
+		fit += 1.0
 	case p < kitPrice:
 		fit += 6 * penalty * factor * float64(kitPrice) / float64(kitPrice-p+kitPrice)
 	default:
@@ -129,8 +132,12 @@ func calculateFitness(p int, f map[int]int) float64 {
 		nrProducts += v
 	}
 
-	fit += factor * float64(nrFamilies) / float64(nrProducts)
-	fit = math.Round(fit*100) / 100
+	if nrProducts != 0 {
+		fit += factor * float64(nrFamilies) / float64(nrProducts)
+		fit = math.Round(fit*100) / 100
+	} else {
+		fit += 1.0
+	}
 
 	fmt.Println("\u0394p: ", p, "  f: ", f, "  fit: ", fit, "  nrProducts: ", nrProducts, " nrFamilies: ", nrFamilies)
 	return fit
@@ -208,8 +215,27 @@ func crossover(pop [][]int, parents []int) [][]int {
 	return children
 }
 
+func mutation(pop [][]int) [][]int {
+	nrGenes := univSize * popSize
+	nrMutations := int(probMutation * float64(nrGenes))
+	fmt.Println("Doing nrMutations: ", nrMutations)
+	for i := 0; i < nrMutations; i++ {
+		individual := rndInt(0, popSize)
+		alele := rndInt(0, univSize)
+		old := pop[individual][alele]
+		fmt.Println("individual: ", individual, "   alele: ", alele, "   actual: ", old)
+		switch old {
+		case 0:
+			pop[individual][alele] = 1
+		case 1:
+			pop[individual][alele] = 0
+		}
+	}
+	return pop
+}
+
 func decodePopulation(pop [][]int, univCodes []int, fit []float64) {
-    fmt.Println(univCodes)
+	fmt.Println(univCodes)
 	for i := 0; i < len(pop); i++ {
 		ind := pop[i]
 		fmt.Print(ind, " -> ")
@@ -234,7 +260,8 @@ func main() {
 	fmt.Println("Universe: ", universe)
 	univCodes := chooseCodes(univSize)
 	fmt.Println("univCodes: ", univCodes)
-	population := buildInitialPopulation(popSize, univCodes)
+	var population [][]int
+	population = buildInitialPopulation(popSize, univCodes)
 	fmt.Println("Population: ", population)
 	fit := make([]float64, 0)
 	fit_sorted := make([]float64, len(population))
@@ -252,8 +279,9 @@ func main() {
 		stat = append(stat, fit_sorted[len(fit_sorted)-1])
 		fmt.Println("pool: ", pool)
 		population = crossover(population, pool)
+		population = mutation(population)
 		fmt.Println("offspring ", population)
-		if generations == 5 {
+		if generations == 50 {
 			break
 		}
 		generations += 1
