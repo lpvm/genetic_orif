@@ -17,14 +17,14 @@ var universe = make(map[int]popDetails)
 
 const maxPrice = 10000
 const univSize = 16
-const popSize = 8
+const popSize = 40
 const kitPrice = 9000          // in cents
 const familyRatio = 7.0 / 10.0 // at least 7 families in 10 products
 const tournSize = 2
 const minFit = 1000
 const factor = 500.0 // for family diversity, the more, the better
-const penalty = 2.0  // for distance of sum of prices to 9000, when below
-const probMutation = 0.1
+const penalty = 0.25  // for distance of sum of prices to 9000, when below
+const probMutation = 0.05
 
 func rndInt(lo, hi int) int {
 	return rand.Intn(hi-lo) + lo
@@ -120,7 +120,7 @@ func calculateFitness(p int, f map[int]int) float64 {
 	case p == 0:
 		fit += 1.0
 	case p < kitPrice:
-		fit += 6 * penalty * factor * float64(kitPrice) / float64(kitPrice-p+kitPrice)
+		fit += 6 * penalty * factor * float64(kitPrice) / float64(kitPrice-p+kitPrice) - 2 * factor
 	default:
 		fit += 6 * factor * float64(kitPrice) / float64(p)
 	}
@@ -138,8 +138,6 @@ func calculateFitness(p int, f map[int]int) float64 {
 	} else {
 		fit += 1.0
 	}
-
-	fmt.Println("\u0394p: ", p, "  f: ", f, "  fit: ", fit, "  nrProducts: ", nrProducts, " nrFamilies: ", nrFamilies)
 	return fit
 }
 
@@ -150,9 +148,24 @@ func evaluatePopulation(pop [][]int, ucodes []int) []float64 {
 	for i := 0; i < len(pop); i++ {
 		p, fam = quantifyChromossome(pop[i], ucodes)
 		fit = append(fit, calculateFitness(p, fam))
-		fmt.Println("Gene: ", pop[i], "   fit: ", fit[len(fit)-1])
+		fmt.Println("Gene: ", pop[i], "   fit: ", fit[len(fit)-1], "  nrProducts: ", p, " nrFamilies: ", fam)
 	}
 	return fit
+}
+
+// getBestIndividual returns the individual with the best fitness
+func getBestIndividual(pop [][]int, fit []float64) []int {
+	maxFit := -10e9
+	indxMax := -1
+	best := make([]int, len(pop[0]))
+	for i, v := range fit {
+		if v > maxFit {
+			maxFit = v
+			indxMax = i
+		}
+	}
+	copy(best, pop[indxMax])
+	return best
 }
 
 // selectParents use tournament to select parents of offspring based on their
@@ -183,7 +196,7 @@ func selectParents(p [][]int, fit []float64, ucodes []int) []int {
 		case fpar1 == fpar2:
 			parents = append(parents, rnd1)
 		}
-		fmt.Println("rnd1: ", rnd1, "   rnd2: ", rnd2, "   fpar1: ", fpar1, "  fpar2: ", fpar2)
+		//fmt.Println("rnd1: ", rnd1, "   rnd2: ", rnd2, "   fpar1: ", fpar1, "  fpar2: ", fpar2)
 	}
 	return parents
 }
@@ -215,7 +228,7 @@ func crossover(pop [][]int, parents []int) [][]int {
 	return children
 }
 
-func mutation(pop [][]int) [][]int {
+func mutation(pop [][]int) {
 	nrGenes := univSize * popSize
 	nrMutations := int(probMutation * float64(nrGenes))
 	fmt.Println("Doing nrMutations: ", nrMutations)
@@ -231,9 +244,47 @@ func mutation(pop [][]int) [][]int {
 			pop[individual][alele] = 0
 		}
 	}
-	return pop
 }
 
+func equalSlices(a, b []int) bool {
+    if len(a) != len(b) {
+		return false
+	}
+
+	for i, v := range a {
+		if v != b[i] {
+				return false
+		}
+	}
+	return true
+}
+
+// insertBestIndivual inserts the best chromossome of the last generation
+// at the last place of the newly crossed and mutated children slice.
+func insertBestIndivual(pop [][]int, best []int, fit []float64) {
+	alreadyPresent := false
+	var idxWorst int
+	minFit := 10e9
+	for i, f := range fit {
+		if f < minFit {
+				minFit = f
+				idxWorst = i
+		}
+	}
+	b := make([]int, len(best))
+	copy(b, best)
+	for _, p := range pop {
+		if equalSlices(p, b) {
+		    alreadyPresent = true	
+			break
+		}
+	}
+	if ! alreadyPresent {
+		pop[idxWorst] = b
+	}
+}
+
+// decodePopulation
 func decodePopulation(pop [][]int, univCodes []int, fit []float64) {
 	fmt.Println(univCodes)
 	for i := 0; i < len(pop); i++ {
@@ -252,8 +303,19 @@ func decodePopulation(pop [][]int, univCodes []int, fit []float64) {
 	}
 }
 
+// averageFit
+func averageFit(fit []float64) float64 {
+    var total float64
+    for i := 0; i < len(fit); i++ {
+		total += fit[i]
+	}
+    return math.Round(total / float64(len(fit)) * 100) / 100
+}
+
 func main() {
 	// maxPrice expressed in cents
+	var elitism = true
+	var bestIndividual []int
 
 	fmt.Println()
 	universe = mapUniverse(univSize)
@@ -266,26 +328,36 @@ func main() {
 	fit := make([]float64, 0)
 	fit_sorted := make([]float64, len(population))
 	pool := make([]int, 0)
-	stat := make([]float64, 0)
+	statMax := make([]float64, 0)
+	statAvg := make([]float64, 0)
 	generations := 0
 	for {
 		fmt.Println("------------------------------------------------------------- generations: ", generations)
 		fit = evaluatePopulation(population, univCodes)
-		fmt.Println("fit2: ", fit)
-		pool = selectParents(population, fit, univCodes)
+		if elitism {
+			bestIndividual = getBestIndividual(population, fit)
+		}
 		copy(fit_sorted, fit)
 		sort.Float64s(fit_sorted)
 		fmt.Println("fit_sorted: ", fit_sorted)
-		stat = append(stat, fit_sorted[len(fit_sorted)-1])
-		fmt.Println("pool: ", pool)
-		population = crossover(population, pool)
-		population = mutation(population)
-		fmt.Println("offspring ", population)
-		if generations == 50 {
+		statMax = append(statMax, fit_sorted[len(fit_sorted)-1])
+		statAvg = append(statAvg, averageFit(fit_sorted))
+		if generations == 800 {
 			break
 		}
+
+		pool = selectParents(population, fit, univCodes)
 		generations += 1
+		fmt.Println("pool: ", pool)
+		population = crossover(population, pool)
+		mutation(population)
+		fmt.Println("offspring before elitism", population)
+		if elitism == true {
+			insertBestIndivual(population, bestIndividual, fit)
+		}
+		fmt.Println("offspring after elitism", population)
 	}
-	fmt.Println("stat: ", stat)
+	fmt.Println("statMax: ", statMax)
+	fmt.Println("statAvg: ", statAvg)
 	decodePopulation(population, univCodes, fit)
 }
