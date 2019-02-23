@@ -1,10 +1,16 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"math"
 	"math/rand"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 type popDetails struct {
@@ -13,7 +19,6 @@ type popDetails struct {
 }
 
 var productCode int
-var universe = make(map[int]popDetails)
 
 const maxPrice = 10000
 const univSize = 16
@@ -23,8 +28,45 @@ const familyRatio = 7.0 / 10.0 // at least 7 families in 10 products
 const tournSize = 2
 const minFit = 1000
 const factor = 500.0 // for family diversity, the more, the better
-const penalty = 0.25  // for distance of sum of prices to 9000, when below
+const penalty = 0.25 // for distance of sum of prices to 9000, when below
 const probMutation = 0.05
+const productsFileName = "products.txt"
+
+func getInput(filename string) map[int]popDetails {
+	m := make(map[int]popDetails)
+	var prod, fam, price int
+
+	b, err := ioutil.ReadFile(filename)
+	if err != nil {
+		fmt.Print(err)
+	}
+
+	str := string(b) // convert content to a 'string'
+	//fmt.Println(str) // print the content as a 'string'
+
+	r := csv.NewReader(strings.NewReader(str))
+	s, err := r.ReadAll()
+
+	for i := range s {
+		prod, err = strconv.Atoi(s[i][0])
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(2)
+		}
+		fam, err = strconv.Atoi(s[i][1])
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(2)
+		}
+		price, err = strconv.Atoi(s[i][2])
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(2)
+		}
+		m[prod] = popDetails{fam, price}
+	}
+	return m
+}
 
 func rndInt(lo, hi int) int {
 	return rand.Intn(hi-lo) + lo
@@ -49,9 +91,9 @@ func randEnabled() int {
 
 // chooseCodes converts all codes that are keys of the universe
 // and make a slice of them
-func chooseCodes(sz int) []int {
+func chooseCodes(univ map[int]popDetails, sz int) []int {
 	allCodes := make([]int, 0)
-	for key := range universe {
+	for key := range univ {
 		allCodes = append(allCodes, key)
 	}
 	sort.Ints(allCodes)
@@ -91,7 +133,7 @@ func buildInitialPopulation(sz int, all []int) [][]int {
 // quantifyChromossome takes a chromossome like
 // [1 0 0 1 0 1 1 1 1 0]
 // and return sum of price of products and number of families
-func quantifyChromossome(chrom []int, ucodes []int) (int, map[int]int) {
+func quantifyChromossome(univ map[int]popDetails, chrom []int, ucodes []int) (int, map[int]int) {
 	price := 0
 	families := make(map[int]int)
 	pCode := 0
@@ -99,7 +141,7 @@ func quantifyChromossome(chrom []int, ucodes []int) (int, map[int]int) {
 		// if it's active, get price and family
 		if chrom[i] == 1 {
 			pCode = ucodes[i]
-			u := universe[pCode]
+			u := univ[pCode]
 			price += u.price
 			family := u.family
 			families[family] += 1
@@ -120,7 +162,7 @@ func calculateFitness(p int, f map[int]int) float64 {
 	case p == 0:
 		fit += 1.0
 	case p < kitPrice:
-		fit += 6 * penalty * factor * float64(kitPrice) / float64(kitPrice-p+kitPrice) - 2 * factor
+		fit += 6*penalty*factor*float64(kitPrice)/float64(kitPrice-p+kitPrice) - 2*factor
 	default:
 		fit += 6 * factor * float64(kitPrice) / float64(p)
 	}
@@ -141,12 +183,12 @@ func calculateFitness(p int, f map[int]int) float64 {
 	return fit
 }
 
-func evaluatePopulation(pop [][]int, ucodes []int) []float64 {
+func evaluatePopulation(univ map[int]popDetails, pop [][]int, ucodes []int) []float64 {
 	fit := make([]float64, 0)
 	p := 0
 	fam := make(map[int]int)
 	for i := 0; i < len(pop); i++ {
-		p, fam = quantifyChromossome(pop[i], ucodes)
+		p, fam = quantifyChromossome(univ, pop[i], ucodes)
 		fit = append(fit, calculateFitness(p, fam))
 		fmt.Println("Gene: ", pop[i], "   fit: ", fit[len(fit)-1], "  nrProducts: ", p, " nrFamilies: ", fam)
 	}
@@ -247,13 +289,13 @@ func mutation(pop [][]int) {
 }
 
 func equalSlices(a, b []int) bool {
-    if len(a) != len(b) {
+	if len(a) != len(b) {
 		return false
 	}
 
 	for i, v := range a {
 		if v != b[i] {
-				return false
+			return false
 		}
 	}
 	return true
@@ -267,25 +309,25 @@ func insertBestIndivual(pop [][]int, best []int, fit []float64) {
 	minFit := 10e9
 	for i, f := range fit {
 		if f < minFit {
-				minFit = f
-				idxWorst = i
+			minFit = f
+			idxWorst = i
 		}
 	}
 	b := make([]int, len(best))
 	copy(b, best)
 	for _, p := range pop {
 		if equalSlices(p, b) {
-		    alreadyPresent = true	
+			alreadyPresent = true
 			break
 		}
 	}
-	if ! alreadyPresent {
+	if !alreadyPresent {
 		pop[idxWorst] = b
 	}
 }
 
 // decodePopulation
-func decodePopulation(pop [][]int, univCodes []int, fit []float64) {
+func decodePopulation(univ map[int]popDetails, pop [][]int, univCodes []int, fit []float64) {
 	fmt.Println(univCodes)
 	for i := 0; i < len(pop); i++ {
 		ind := pop[i]
@@ -298,29 +340,54 @@ func decodePopulation(pop [][]int, univCodes []int, fit []float64) {
 		}
 		fmt.Print("\t\t", fit[i], " : ")
 
-		p, fam := quantifyChromossome(ind, univCodes)
+		p, fam := quantifyChromossome(univ, ind, univCodes)
 		fmt.Println(p, " _ ", fam)
 	}
 }
 
 // averageFit
 func averageFit(fit []float64) float64 {
-    var total float64
-    for i := 0; i < len(fit); i++ {
+	var total float64
+	for i := 0; i < len(fit); i++ {
 		total += fit[i]
 	}
-    return math.Round(total / float64(len(fit)) * 100) / 100
+	return math.Round(total/float64(len(fit))*100) / 100
+}
+
+func saveProducts(m map[int]popDetails, filename string) {
+	file, err := os.Create(filename)
+	checkError("Cannot create file ", err)
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	for k, v := range m {
+		s := []string{strconv.Itoa(k), strconv.Itoa(v.family), strconv.Itoa(v.price)}
+		err := writer.Write(s)
+		checkError("Cannot write to file ", err)
+	}
+}
+
+func checkError(message string, err error) {
+	if err != nil {
+		log.Fatal(message, err)
+	}
 }
 
 func main() {
 	// maxPrice expressed in cents
+	universe := make(map[int]popDetails)
 	var elitism = true
 	var bestIndividual []int
 
 	fmt.Println()
 	universe = mapUniverse(univSize)
+	//saveProducts(universe, productsFileName)
+	//universe = getInput(productsFileName )
+
 	fmt.Println("Universe: ", universe)
-	univCodes := chooseCodes(univSize)
+	univCodes := chooseCodes(universe, univSize)
 	fmt.Println("univCodes: ", univCodes)
 	var population [][]int
 	population = buildInitialPopulation(popSize, univCodes)
@@ -333,7 +400,7 @@ func main() {
 	generations := 0
 	for {
 		fmt.Println("------------------------------------------------------------- generations: ", generations)
-		fit = evaluatePopulation(population, univCodes)
+		fit = evaluatePopulation(universe, population, univCodes)
 		if elitism {
 			bestIndividual = getBestIndividual(population, fit)
 		}
@@ -342,7 +409,7 @@ func main() {
 		fmt.Println("fit_sorted: ", fit_sorted)
 		statMax = append(statMax, fit_sorted[len(fit_sorted)-1])
 		statAvg = append(statAvg, averageFit(fit_sorted))
-		if generations == 800 {
+		if generations == 1 {
 			break
 		}
 
@@ -359,5 +426,5 @@ func main() {
 	}
 	fmt.Println("statMax: ", statMax)
 	fmt.Println("statAvg: ", statAvg)
-	decodePopulation(population, univCodes, fit)
+	decodePopulation(universe, population, univCodes, fit)
 }
